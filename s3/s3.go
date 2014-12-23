@@ -3,6 +3,18 @@ package s3
 
 // FIXME need to prevent anything but ListDir working for s3://
 
+/*
+Issues found
+
+FIXME Report:
+Substitution method prone to repeat substitutions
+- use method submitted to googleapi
+
+FIXME - nil checks
+
+FIXME - region / endpoint stuff
+*/
+
 import (
 	"errors"
 	"fmt"
@@ -11,14 +23,13 @@ import (
 	"net/http"
 	"path"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
-	"github.com/ncw/goamz/aws"
-	"github.com/ncw/goamz/s3"
 	"github.com/ncw/rclone/fs"
 	"github.com/ncw/swift"
+	"github.com/stripe/aws-go/aws"
+	"github.com/stripe/aws-go/gen/s3"
 )
 
 // Register with Fs
@@ -106,11 +117,11 @@ const (
 
 // FsS3 represents a remote s3 server
 type FsS3 struct {
-	c      *s3.S3     // the connection to the s3 server
-	b      *s3.Bucket // the connection to the bucket
-	bucket string     // the bucket we are working on
-	perm   s3.ACL     // permissions for new buckets / objects
-	root   string     // root of the bucket - ignore all objects above this
+	c                  *s3.S3          // the connection to the s3 server
+	bucket             string          // the bucket we are working on
+	perm               aws.StringValue // permissions for new buckets / objects
+	root               string          // root of the bucket - ignore all objects above this
+	locationConstraint string          // location constraint of new buckets
 }
 
 // FsObjectS3 describes a s3 object
@@ -119,12 +130,12 @@ type FsObjectS3 struct {
 	//
 	// List will read everything but meta - to fill that in need to call
 	// readMetaData
-	s3           *FsS3      // what this object is part of
-	remote       string     // The remote path
-	etag         string     // md5sum of the object
-	bytes        int64      // size of the object
-	lastModified time.Time  // Last modified
-	meta         s3.Headers // The object metadata if known - may be nil
+	s3           *FsS3             // what this object is part of
+	remote       string            // The remote path
+	etag         string            // md5sum of the object
+	bytes        int64             // size of the object
+	lastModified time.Time         // Last modified
+	meta         map[string]string // The object metadata if known - may be nil
 }
 
 // ------------------------------------------------------------
@@ -163,7 +174,7 @@ func s3Connection(name string) (*s3.S3, error) {
 	if secretAccessKey == "" {
 		return nil, errors.New("secret_access_key not found")
 	}
-	auth := aws.Auth{AccessKey: accessKeyId, SecretKey: secretAccessKey}
+	auth := aws.Creds(accessKeyId, secretAccessKey, "")
 
 	// FIXME look through all the regions by name and use one of them if found
 
@@ -172,18 +183,20 @@ func s3Connection(name string) (*s3.S3, error) {
 	if s3Endpoint == "" {
 		s3Endpoint = "https://s3.amazonaws.com/"
 	}
-	region := aws.Region{
-		Name:                 "s3",
-		S3Endpoint:           s3Endpoint,
-		S3LocationConstraint: false,
-	}
-	s3LocationConstraint := fs.ConfigFile.MustValue(name, "location_constraint")
-	if s3LocationConstraint != "" {
-		region.Name = s3LocationConstraint
-		region.S3LocationConstraint = true
-	}
+	// FIXME
+	// region := aws.Region{
+	// 	Name:                 "s3",
+	// 	S3Endpoint:           s3Endpoint,
+	// 	S3LocationConstraint: false,
+	// }
+	// s3LocationConstraint := fs.ConfigFile.MustValue(name, "location_constraint")
+	// if s3LocationConstraint != "" {
+	// 	region.Name = s3LocationConstraint
+	// 	region.S3LocationConstraint = true
+	// }
+	region := fs.ConfigFile.MustValue(name, "location_constraint")
 
-	c := s3.New(auth, region)
+	c := s3.New(auth, region, nil)
 	return c, nil
 }
 
@@ -200,14 +213,18 @@ func NewFs(name, root string) (fs.Fs, error) {
 	f := &FsS3{
 		c:      c,
 		bucket: bucket,
-		b:      c.Bucket(bucket),
-		perm:   s3.Private, // FIXME need user to specify
-		root:   directory,
+		// FIXME perm:   s3.Private, // FIXME need user to specify
+		root:               directory,
+		locationConstraint: fs.ConfigFile.MustValue(name, "location_constraint"),
 	}
 	if f.root != "" {
 		f.root += "/"
 		// Check to see if the object exists
-		_, err = f.b.Head(directory, nil)
+		req := s3.HeadObjectRequest{
+			Bucket: &f.bucket,
+			Key:    &directory,
+		}
+		_, err = f.c.HeadObject(&req)
 		if err == nil {
 			remote := path.Base(directory)
 			f.root = path.Dir(directory)
@@ -227,21 +244,21 @@ func NewFs(name, root string) (fs.Fs, error) {
 // Return an FsObject from a path
 //
 // May return nil if an error occurred
-func (f *FsS3) newFsObjectWithInfo(remote string, info *s3.Key) fs.Object {
+func (f *FsS3) newFsObjectWithInfo(remote string, info *s3.Object) fs.Object {
 	o := &FsObjectS3{
 		s3:     f,
 		remote: remote,
 	}
 	if info != nil {
 		// Set info but not meta
-		var err error
-		o.lastModified, err = time.Parse(time.RFC3339, info.LastModified)
-		if err != nil {
-			fs.Log(o, "Failed to read last modified: %s", err)
+		if info.LastModified.IsZero() {
+			fs.Log(o, "Failed to read last modified")
 			o.lastModified = time.Now()
+		} else {
+			o.lastModified = info.LastModified
 		}
-		o.etag = info.ETag
-		o.bytes = info.Size
+		o.etag = *info.ETag  // FIXME nil
+		o.bytes = *info.Size // FIXME nil
 	} else {
 		err := o.readMetaData() // reads info and meta, returning an error
 		if err != nil {
@@ -262,38 +279,51 @@ func (f *FsS3) NewFsObject(remote string) fs.Object {
 // list the objects into the function supplied
 //
 // If directories is set it only sends directories
-func (f *FsS3) list(directories bool, fn func(string, *s3.Key)) {
+func (f *FsS3) list(directories bool, fn func(string, *s3.Object)) {
 	delimiter := ""
 	if directories {
 		delimiter = "/"
 	}
+	maxKeys := 10000
 	// FIXME need to implement ALL loop
-	objects, err := f.b.List(f.root, delimiter, "", 10000)
+	req := s3.ListObjectsRequest{
+		Bucket:    &f.bucket,
+		Delimiter: &delimiter,
+		Prefix:    &f.root,
+		MaxKeys:   &maxKeys,
+	}
+	resp, err := f.c.ListObjects(&req)
 	if err != nil {
 		fs.Stats.Error()
 		fs.Log(f, "Couldn't read bucket %q: %s", f.bucket, err)
 	} else {
 		rootLength := len(f.root)
 		if directories {
-			for _, remote := range objects.CommonPrefixes {
+			for _, commonPrefix := range resp.CommonPrefixes {
+				if commonPrefix.Prefix == nil {
+					fs.Log(f, "Nil common prefix received")
+					continue
+				}
+				remote := *commonPrefix.Prefix
 				if !strings.HasPrefix(remote, f.root) {
 					fs.Log(f, "Odd name received %q", remote)
 					continue
 				}
-				remote := remote[rootLength:]
+				remote = remote[rootLength:]
 				if strings.HasSuffix(remote, "/") {
 					remote = remote[:len(remote)-1]
 				}
-				fn(remote, &s3.Key{Key: remote})
+				fn(remote, &s3.Object{Key: &remote})
 			}
 		} else {
-			for i := range objects.Contents {
-				object := &objects.Contents[i]
-				if !strings.HasPrefix(object.Key, f.root) {
-					fs.Log(f, "Odd name received %q", object.Key)
+			for i := range resp.Contents {
+				object := &resp.Contents[i]
+				key := *object.Key // FIXME nil *object.Key?
+				if !strings.HasPrefix(key, f.root) {
+					fs.Log(f, "Odd name received %q", key)
 					continue
 				}
-				remote := object.Key[rootLength:]
+				remote := key[rootLength:]
 				fn(remote, object)
 			}
 		}
@@ -311,7 +341,7 @@ func (f *FsS3) List() fs.ObjectsChan {
 	} else {
 		go func() {
 			defer close(out)
-			f.list(false, func(remote string, object *s3.Key) {
+			f.list(false, func(remote string, object *s3.Object) {
 				if fs := f.newFsObjectWithInfo(remote, object); fs != nil {
 					out <- fs
 				}
@@ -328,14 +358,14 @@ func (f *FsS3) ListDir() fs.DirChan {
 		// List the buckets
 		go func() {
 			defer close(out)
-			buckets, err := f.c.ListBuckets()
+			resp, err := f.c.ListBuckets()
 			if err != nil {
 				fs.Stats.Error()
 				fs.Log(f, "Couldn't list buckets: %s", err)
 			} else {
-				for _, bucket := range buckets {
+				for _, bucket := range resp.Buckets {
 					out <- &fs.Dir{
-						Name:  bucket.Name,
+						Name:  *bucket.Name, // FIXME nil
 						When:  bucket.CreationDate,
 						Bytes: -1,
 						Count: -1,
@@ -347,10 +377,14 @@ func (f *FsS3) ListDir() fs.DirChan {
 		// List the directories in the path in the bucket
 		go func() {
 			defer close(out)
-			f.list(true, func(remote string, object *s3.Key) {
+			f.list(true, func(remote string, object *s3.Object) {
+				size := int64(0)
+				if object.Size != nil {
+					size = *object.Size
+				}
 				out <- &fs.Dir{
 					Name:  remote,
-					Bytes: object.Size,
+					Bytes: size,
 					Count: 0,
 				}
 			})
@@ -368,8 +402,17 @@ func (f *FsS3) Put(in io.Reader, remote string, modTime time.Time, size int64) (
 
 // Mkdir creates the bucket if it doesn't exist
 func (f *FsS3) Mkdir() error {
-	err := f.b.PutBucket(f.perm)
-	if err, ok := err.(*s3.Error); ok {
+	req := s3.CreateBucketRequest{
+		Bucket: &f.bucket,
+		ACL:    f.perm,
+	}
+	if f.locationConstraint != "" {
+		req.CreateBucketConfiguration = &s3.CreateBucketConfiguration{
+			LocationConstraint: &f.locationConstraint,
+		}
+	}
+	_, err := f.c.CreateBucket(&req)
+	if err, ok := err.(*aws.APIError); ok {
 		if err.Code == "BucketAlreadyOwnedByYou" {
 			return nil
 		}
@@ -381,7 +424,10 @@ func (f *FsS3) Mkdir() error {
 //
 // Returns an error if it isn't empty
 func (f *FsS3) Rmdir() error {
-	return f.b.DelBucket()
+	req := s3.DeleteBucketRequest{
+		Bucket: &f.bucket,
+	}
+	return f.c.DeleteBucket(&req)
 }
 
 // Return the precision
@@ -429,14 +475,22 @@ func (o *FsObjectS3) readMetaData() (err error) {
 	if o.meta != nil {
 		return nil
 	}
-	var headers s3.Headers
+	key := o.s3.root + o.remote
+	req := s3.HeadObjectRequest{
+		Bucket: &o.s3.bucket,
+		Key:    &key,
+	}
+	var resp *s3.HeadObjectOutput
 
 	// Try reading the metadata a few times (with exponential
 	// backoff) to get around eventual consistency on 404 error
 	for tries := uint(0); tries < 10; tries++ {
-		headers, err = o.s3.b.Head(o.s3.root+o.remote, nil)
-		if s3Err, ok := err.(*s3.Error); ok {
-			if s3Err.StatusCode == http.StatusNotFound {
+		resp, err = o.s3.c.HeadObject(&req)
+		if err == nil {
+			break
+		}
+		if awsErr, ok := err.(aws.APIError); ok {
+			if awsErr.StatusCode == http.StatusNotFound {
 				time.Sleep(5 * time.Millisecond << tries)
 				continue
 			}
@@ -450,17 +504,13 @@ func (o *FsObjectS3) readMetaData() (err error) {
 	var size int64
 	// Ignore missing Content-Length assuming it is 0
 	// Some versions of ceph do this due their apache proxies
-	if contentLength, ok := headers["Content-Length"]; ok {
-		size, err = strconv.ParseInt(contentLength, 10, 64)
-		if err != nil {
-			fs.Debug(o, "Failed to read size from: %q", headers)
-			return err
-		}
+	if resp.ContentLength != nil {
+		size = *resp.ContentLength
 	}
-	o.etag = headers["Etag"]
+	o.etag = *resp.ETag // FIXME nil
 	o.bytes = size
-	o.meta = headers
-	if o.lastModified, err = time.Parse(http.TimeFormat, headers["Last-Modified"]); err != nil {
+	o.meta = resp.Metadata
+	if o.lastModified, err = time.Parse(http.TimeFormat, o.meta["Last-Modified"]); err != nil {
 		fs.Log(o, "Failed to read last modified from HEAD: %s", err)
 		o.lastModified = time.Now()
 	}
@@ -500,7 +550,20 @@ func (o *FsObjectS3) SetModTime(modTime time.Time) {
 		return
 	}
 	o.meta[metaMtime] = swift.TimeToFloatString(modTime)
-	_, err = o.s3.b.Update(o.s3.root+o.remote, o.s3.perm, o.meta)
+
+	// Copy the object to itself to update the metadata
+	key := o.s3.root + o.remote
+	sourceKey := o.s3.bucket + "/" + key
+	directive := s3.MetadataDirectiveReplace // replace metadata with that passed in
+	req := s3.CopyObjectRequest{
+		Bucket:            &o.s3.bucket,
+		ACL:               o.s3.perm,
+		Key:               &key,
+		CopySource:        &sourceKey,
+		Metadata:          o.meta,
+		MetadataDirective: &directive,
+	}
+	_, err = o.s3.c.CopyObject(&req)
 	if err != nil {
 		fs.Stats.Error()
 		fs.Log(o, "Failed to update remote mtime: %s", err)
@@ -514,14 +577,35 @@ func (o *FsObjectS3) Storable() bool {
 
 // Open an object for read
 func (o *FsObjectS3) Open() (in io.ReadCloser, err error) {
-	in, err = o.s3.b.GetReader(o.s3.root + o.remote)
-	return
+	key := o.s3.root + o.remote
+	req := s3.GetObjectRequest{
+		Bucket: &o.s3.bucket,
+		Key:    &key,
+	}
+	resp, err := o.s3.c.GetObject(&req)
+	if err != nil {
+		return nil, err
+	}
+	return resp.Body, nil
 }
+
+// Wrap an io.Reader to make it an io.ReadCloser
+type readCloser struct {
+	io.Reader
+}
+
+// Pretend to close the io.Reader
+func (r *readCloser) Close() error {
+	return nil
+}
+
+// Check it implements the interface
+var _ io.ReadCloser = (*readCloser)(nil)
 
 // Update the Object from in with modTime and size
 func (o *FsObjectS3) Update(in io.Reader, modTime time.Time, size int64) error {
-	// Set the mtime in the headers
-	headers := s3.Headers{
+	// Set the mtime in the meta data
+	metadata := map[string]string{
 		metaMtime: swift.TimeToFloatString(modTime),
 	}
 
@@ -531,7 +615,17 @@ func (o *FsObjectS3) Update(in io.Reader, modTime time.Time, size int64) error {
 		contentType = "application/octet-stream"
 	}
 
-	_, err := o.s3.b.PutReaderHeaders(o.s3.root+o.remote, in, size, contentType, o.s3.perm, headers)
+	key := o.s3.root + o.remote
+	req := s3.PutObjectRequest{
+		Bucket:        &o.s3.bucket,
+		ACL:           o.s3.perm,
+		Key:           &key,
+		Body:          &readCloser{in},
+		ContentLength: &size,
+		ContentType:   &contentType,
+		Metadata:      metadata,
+	}
+	_, err := o.s3.c.PutObject(&req)
 	if err != nil {
 		return err
 	}
@@ -543,7 +637,13 @@ func (o *FsObjectS3) Update(in io.Reader, modTime time.Time, size int64) error {
 
 // Remove an object
 func (o *FsObjectS3) Remove() error {
-	return o.s3.b.Del(o.s3.root + o.remote)
+	key := o.s3.root + o.remote
+	req := s3.DeleteObjectRequest{
+		Bucket: &o.s3.bucket,
+		Key:    &key,
+	}
+	_, err := o.s3.c.DeleteObject(&req)
+	return err
 }
 
 // Check the interfaces are satisfied
