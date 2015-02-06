@@ -7,9 +7,9 @@ package googlecloudstorage_test
 import (
 	"testing"
 
-	"github.com/ncw/rclone/fs"
-	"github.com/ncw/rclone/fstest/fstests"
-	"github.com/ncw/rclone/googlecloudstorage"
+	"github.com/tinygrasshopper/rclone/fs"
+	"github.com/tinygrasshopper/rclone/fstest/fstests"
+	"github.com/tinygrasshopper/rclone/googlecloudstorage"
 )
 
 func init() {

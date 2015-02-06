@@ -7,9 +7,9 @@ package drive_test
 import (
 	"testing"
 
-	"github.com/ncw/rclone/drive"
-	"github.com/ncw/rclone/fs"
-	"github.com/ncw/rclone/fstest/fstests"
+	"github.com/tinygrasshopper/rclone/drive"
+	"github.com/tinygrasshopper/rclone/fs"
+	"github.com/tinygrasshopper/rclone/fstest/fstests"
 )
 
 func init() {

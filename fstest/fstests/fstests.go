@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ncw/rclone/fs"
-	"github.com/ncw/rclone/fstest"
+	"github.com/tinygrasshopper/rclone/fs"
+	"github.com/tinygrasshopper/rclone/fstest"
 )
 
 var (

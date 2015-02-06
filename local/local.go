@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ncw/rclone/fs"
+	"github.com/tinygrasshopper/rclone/fs"
 )
 
 // Register with Fs

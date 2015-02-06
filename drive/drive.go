@@ -28,8 +28,8 @@ import (
 
 	"google.golang.org/api/drive/v2"
 
-	"github.com/ncw/rclone/fs"
-	"github.com/ncw/rclone/googleauth"
+	"github.com/tinygrasshopper/rclone/fs"
+	"github.com/tinygrasshopper/rclone/googleauth"
 	"github.com/ogier/pflag"
 )
 

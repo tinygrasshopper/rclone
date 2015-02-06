@@ -27,8 +27,8 @@ import (
 	"google.golang.org/api/googleapi"
 	"google.golang.org/api/storage/v1"
 
-	"github.com/ncw/rclone/fs"
-	"github.com/ncw/rclone/googleauth"
+	"github.com/tinygrasshopper/rclone/fs"
+	"github.com/tinygrasshopper/rclone/googleauth"
 )
 
 const (

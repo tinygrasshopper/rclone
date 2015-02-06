@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ncw/rclone/fs"
+	"github.com/tinygrasshopper/rclone/fs"
 )
 
 // Seed the random number generator

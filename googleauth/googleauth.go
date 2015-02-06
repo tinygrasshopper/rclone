@@ -8,7 +8,7 @@ import (
 	"net/http"
 
 	"code.google.com/p/goauth2/oauth"
-	"github.com/ncw/rclone/fs"
+	"github.com/tinygrasshopper/rclone/fs"
 )
 
 // A token cache to save the token in the config file section named

@@ -15,16 +15,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ncw/rclone/fs"
-	"github.com/ncw/rclone/fstest"
+	"github.com/tinygrasshopper/rclone/fs"
+	"github.com/tinygrasshopper/rclone/fstest"
 
 	// Active file systems
-	_ "github.com/ncw/rclone/drive"
-	_ "github.com/ncw/rclone/dropbox"
-	_ "github.com/ncw/rclone/googlecloudstorage"
-	_ "github.com/ncw/rclone/local"
-	_ "github.com/ncw/rclone/s3"
-	_ "github.com/ncw/rclone/swift"
+	_ "github.com/tinygrasshopper/rclone/drive"
+	_ "github.com/tinygrasshopper/rclone/dropbox"
+	_ "github.com/tinygrasshopper/rclone/googlecloudstorage"
+	_ "github.com/tinygrasshopper/rclone/local"
+	_ "github.com/tinygrasshopper/rclone/s3"
+	_ "github.com/tinygrasshopper/rclone/swift"
 )
 
 // Globals
