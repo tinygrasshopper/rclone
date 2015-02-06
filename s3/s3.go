@@ -15,10 +15,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ncw/goamz/aws"
-	"github.com/ncw/goamz/s3"
 	"github.com/ncw/rclone/fs"
 	"github.com/ncw/swift"
+	"github.com/tinygrasshopper/goamz/aws"
+	"github.com/tinygrasshopper/goamz/s3"
 )
 
 // Register with Fs
